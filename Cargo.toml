@@ -1,0 +1,13 @@
+[package]
+name = "alacritty-themes-rs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+console = "0.15.8"
+ctrlc = "3.4.5"
+dialoguer = "0.11.0"
+dirs = "5.0.1"
+include_dir = "0.7.4"
+serde = { version = "1.0.214", features = ["derive"] }
+toml = "0.8.19"
