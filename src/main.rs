@@ -1,14 +1,27 @@
-use console::Term;
-use dialoguer::{theme::ColorfulTheme, Select};
+use crossterm::{
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
 use dirs::config_dir;
 use include_dir::{include_dir, Dir};
 use std::fs;
 use std::fs::create_dir_all;
+use std::io::{self};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use structured_data::structs::{merge_colors, Colors};
 use toml::Value;
+use tui::{
+    backend::CrosstermBackend,
+    layout::{Constraint, Direction, Layout},
+    style::{Color, Modifier, Style},
+    text::{Span, Spans},
+    widgets::{Block, Borders, List, ListItem, Paragraph},
+    Terminal,
+};
 
 mod structured_data;
 
@@ -24,11 +37,6 @@ fn main() -> Result<()> {
     let original_colors = extract_colors_from_config(&original_config)?;
 
     let running = Arc::new(AtomicBool::new(true));
-    let r = running.clone();
-
-    ctrlc::set_handler(move || {
-        r.store(false, Ordering::SeqCst);
-    })?;
 
     ensure_themes_directory()?;
     let themes_path = config_dir()
@@ -52,7 +60,7 @@ fn select_theme_with_preview(
     default_theme: &Colors,
     running: &Arc<AtomicBool>,
 ) -> Result<Option<PathBuf>> {
-    let entries: Vec<_> = fs::read_dir(themes_path)?
+    let entries: Vec<_> = std::fs::read_dir(themes_path)?
         .filter_map(|entry| entry.ok())
         .collect();
     let theme_names: Vec<_> = entries
@@ -60,28 +68,134 @@ fn select_theme_with_preview(
         .filter_map(|entry| entry.file_name().into_string().ok())
         .collect();
 
-    let binding = ColorfulTheme::default();
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
 
-    let select = Select::with_theme(&binding)
-        .with_prompt("Select a theme (Press ↵ to apply, Esc to cancel)")
-        .items(&theme_names);
+    let mut selected_index = 0;
+    let mut selected_path: Option<PathBuf> = None;
+    let mut view_offset = 0;
 
-    let term = Term::stderr();
+    let mut current_preview_index = usize::MAX;
 
-    let selection = select.interact_on_opt(&term)?.and_then(|i| {
-        if running.load(Ordering::SeqCst) {
-            let path = entries[i].path();
+    loop {
+        if !running.load(Ordering::SeqCst) {
+            break;
+        }
+
+        if selected_index != current_preview_index {
+            current_preview_index = selected_index;
+            let path = entries[selected_index].path();
             if let Ok(theme) = load_theme(&path) {
                 let merged = merge_colors(default_theme, &theme);
-                let _ = update_alacritty_config(config_path, merged);
+                update_alacritty_config(config_path, merged)?;
             }
-            Some(path)
-        } else {
-            None
         }
-    });
 
-    Ok(selection)
+        terminal.draw(|f| {
+            let terminal_size = f.size();
+            let max_view_items = (terminal_size.height as usize).saturating_sub(5);
+
+            if selected_index < view_offset {
+                view_offset = selected_index;
+            } else if selected_index >= view_offset + max_view_items {
+                view_offset = selected_index + 1 - max_view_items;
+            }
+
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(5), Constraint::Length(3)].as_ref())
+                .split(terminal_size);
+
+            let items: Vec<ListItem> = theme_names
+                .iter()
+                .enumerate()
+                .skip(view_offset)
+                .take(max_view_items)
+                .map(|(i, name)| {
+                    let style = if i == selected_index {
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                    };
+                    ListItem::new(Span::styled(name.clone(), style))
+                })
+                .collect();
+
+            let theme_list = List::new(items)
+                .block(Block::default().borders(Borders::ALL).title("Themes"))
+                .highlight_style(Style::default().bg(Color::Blue));
+
+            let preview = Paragraph::new(Spans::from(vec![
+                Span::raw(format!(
+                    "Preview of {} - Exit with ",
+                    theme_names[selected_index]
+                )),
+                Span::styled(
+                    "<Esc>",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" or select with "),
+                Span::styled(
+                    "<Enter>",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]))
+            .block(Block::default().borders(Borders::ALL).title("Preview"));
+
+            f.render_widget(theme_list, chunks[0]);
+            f.render_widget(preview, chunks[1]);
+        })?;
+
+        if !running.load(Ordering::SeqCst) {
+            break;
+        }
+
+        if event::poll(Duration::from_millis(100))? {
+            if let Event::Key(KeyEvent { code, .. }) = event::read()? {
+                match code {
+                    KeyCode::Down => {
+                        if selected_index < theme_names.len() - 1 {
+                            selected_index += 1;
+                        }
+                    }
+                    KeyCode::Up => {
+                        if selected_index > 0 {
+                            selected_index -= 1;
+                        }
+                    }
+                    KeyCode::Enter => {
+                        selected_path = Some(entries[selected_index].path());
+                        break;
+                    }
+                    KeyCode::Esc => break,
+                    _ => {}
+                }
+            }
+        }
+
+        if !running.load(Ordering::SeqCst) {
+            break;
+        }
+    }
+
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
+    terminal.show_cursor()?;
+
+    Ok(selected_path)
 }
 
 fn extract_colors_from_config(config_content: &str) -> Result<Colors> {
