@@ -76,6 +76,8 @@ fn select_theme_with_preview(
 	let mut view_offset = 0;
 	let mut current_preview_index = usize::MAX;
 
+	const PAGE_JUMP: usize = 10;
+
 	loop {
 		if !running.load(Ordering::SeqCst) {
 			break;
@@ -144,6 +146,13 @@ fn select_theme_with_preview(
 					"<Enter>",
 					Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
 				),
+				Span::raw(" Move: "),
+				Span::styled("↑↓", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+				Span::raw(" Page: "),
+				Span::styled(
+					"PgUp/PgDn",
+					Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+				),
 			]))
 			.block(Block::default().borders(Borders::ALL).title("Keymap"));
 
@@ -166,6 +175,12 @@ fn select_theme_with_preview(
 						if selected_index > 0 {
 							selected_index -= 1;
 						}
+					},
+					KeyCode::PageDown => {
+						selected_index = (selected_index + PAGE_JUMP).min(theme_names.len().saturating_sub(1));
+					},
+					KeyCode::PageUp => {
+						selected_index = selected_index.saturating_sub(PAGE_JUMP);
 					},
 					KeyCode::Enter => {
 						selected_path = Some(entries[selected_index].path());
