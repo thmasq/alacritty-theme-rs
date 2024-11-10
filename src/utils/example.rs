@@ -2,6 +2,7 @@ use tui::style::{Color, Style};
 use tui::text::{Span, Spans};
 use tui::widgets::Paragraph;
 
+#[allow(clippy::too_many_lines)]
 pub fn return_example() -> Paragraph<'static> {
 	Paragraph::new(vec![
 		// First line
