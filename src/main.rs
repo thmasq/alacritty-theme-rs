@@ -1,4 +1,6 @@
-use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent};
+use crossterm::event::{
+	self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, MouseEvent, MouseEventKind,
+};
 use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use dirs::config_dir;
@@ -124,23 +126,78 @@ fn run_event_loop(
 			continue;
 		}
 
-		if let Event::Key(key_event) = event::read()? {
-			if !handle_key_event(
-				key_event,
-				&mut selected_index,
-				theme_names.len(),
-				&mut terminal,
-				&mut selected_path,
-				entries,
-			)? {
-				break;
-			}
+		match event::read()? {
+			Event::Key(key_event) => {
+				if !handle_key_event(
+					key_event,
+					&mut selected_index,
+					theme_names.len(),
+					&mut terminal,
+					&mut selected_path,
+					entries,
+				)? {
+					break;
+				}
+			},
+			Event::Mouse(mouse_event) => {
+				handle_mouse_event(
+					mouse_event,
+					&mut selected_index,
+					&mut view_offset,
+					theme_names.len(),
+					&mut terminal,
+				)?;
+			},
+			_ => {},
 		}
 
 		adjust_view_offset(&mut terminal, &mut view_offset, selected_index)?;
 	}
 
 	Ok(selected_path)
+}
+
+fn handle_mouse_event(
+	mouse_event: MouseEvent,
+	selected_index: &mut usize,
+	view_offset: &mut usize,
+	theme_count: usize,
+	terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+) -> Result<()> {
+	let terminal_height = terminal.size()?.height as usize;
+	let visible_items = terminal_height.saturating_sub(5);
+	let list_area_start = 1;
+	let list_area_end = visible_items + 1;
+
+	let overlap = 3.min(visible_items / 4);
+	let page_jump = visible_items.saturating_sub(overlap);
+
+	match mouse_event.kind {
+		MouseEventKind::ScrollDown => {
+			if *selected_index < theme_count.saturating_sub(1) {
+				*selected_index = (*selected_index + page_jump).min(theme_count.saturating_sub(1));
+			}
+		},
+		MouseEventKind::ScrollUp => {
+			if *selected_index > 0 {
+				*selected_index = selected_index.saturating_sub(page_jump);
+			}
+		},
+		MouseEventKind::Down(_) => {
+			let mouse_y = mouse_event.row as usize;
+			let mouse_x = mouse_event.column as usize;
+			if mouse_x <= (terminal.size()?.width as usize) / 2 && mouse_y >= list_area_start && mouse_y < list_area_end
+			{
+				let clicked_index = *view_offset + (mouse_y - list_area_start);
+				if clicked_index < theme_count {
+					*selected_index = clicked_index;
+				}
+			}
+		},
+		_ => {},
+	}
+
+	Ok(())
 }
 
 fn update_theme_preview(entry: &std::fs::DirEntry, config_path: &Path, default_theme: &Colors) -> Result<()> {
@@ -213,11 +270,13 @@ fn draw_ui(
 				"<Enter>",
 				Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
 			),
-			Span::raw(" Move: "),
+			Span::raw(" Preview: "),
+			Span::styled("Click", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+			Span::raw(" Navigate: "),
 			Span::styled("↑↓", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
 			Span::raw(" Page: "),
 			Span::styled(
-				"PgUp/PgDn",
+				"Scroll/PgUp/PgDn",
 				Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
 			),
 		]))
@@ -260,7 +319,11 @@ fn handle_key_event(
 			}
 		},
 		KeyCode::PageUp => {
-			*selected_index = selected_index.saturating_sub(page_jump);
+			if *selected_index < page_jump {
+				*selected_index = 0;
+			} else {
+				*selected_index -= page_jump;
+			}
 		},
 		KeyCode::Enter => {
 			*selected_path = Some(entries[*selected_index].path());
@@ -269,6 +332,7 @@ fn handle_key_event(
 		KeyCode::Esc => return Ok(false),
 		_ => {},
 	}
+
 	Ok(true)
 }
 
@@ -283,7 +347,7 @@ fn adjust_view_offset(
 
 	if selected_index < *view_offset + buffer_zone {
 		*view_offset = selected_index.saturating_sub(buffer_zone);
-	} else if selected_index >= (*view_offset + visible_items).saturating_sub(buffer_zone) {
+	} else if selected_index >= *view_offset + visible_items.saturating_sub(buffer_zone) {
 		*view_offset = selected_index.saturating_sub(visible_items.saturating_sub(buffer_zone + 1));
 	}
 
