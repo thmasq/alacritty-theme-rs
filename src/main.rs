@@ -132,7 +132,7 @@ fn run_event_loop(
 					key_event,
 					&mut selected_index,
 					theme_names.len(),
-					&mut terminal,
+					&terminal,
 					&mut selected_path,
 					entries,
 				)? {
@@ -143,15 +143,15 @@ fn run_event_loop(
 				handle_mouse_event(
 					mouse_event,
 					&mut selected_index,
-					&mut view_offset,
+					view_offset,
 					theme_names.len(),
-					&mut terminal,
+					&terminal,
 				)?;
 			},
 			_ => {},
 		}
 
-		adjust_view_offset(&mut terminal, &mut view_offset, selected_index)?;
+		adjust_view_offset(&terminal, &mut view_offset, selected_index)?;
 	}
 
 	Ok(selected_path)
@@ -160,9 +160,9 @@ fn run_event_loop(
 fn handle_mouse_event(
 	mouse_event: MouseEvent,
 	selected_index: &mut usize,
-	view_offset: &mut usize,
+	view_offset: usize,
 	theme_count: usize,
-	terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+	terminal: &Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<()> {
 	let terminal_height = terminal.size()?.height as usize;
 	let visible_items = terminal_height.saturating_sub(5);
@@ -188,7 +188,7 @@ fn handle_mouse_event(
 			let mouse_x = mouse_event.column as usize;
 			if mouse_x <= (terminal.size()?.width as usize) / 2 && mouse_y >= list_area_start && mouse_y < list_area_end
 			{
-				let clicked_index = *view_offset + (mouse_y - list_area_start);
+				let clicked_index = view_offset + (mouse_y - list_area_start);
 				if clicked_index < theme_count {
 					*selected_index = clicked_index;
 				}
@@ -291,7 +291,7 @@ fn handle_key_event(
 	key_event: KeyEvent,
 	selected_index: &mut usize,
 	theme_count: usize,
-	terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+	terminal: &Terminal<CrosstermBackend<io::Stdout>>,
 	selected_path: &mut Option<PathBuf>,
 	entries: &[std::fs::DirEntry],
 ) -> Result<bool> {
@@ -337,7 +337,7 @@ fn handle_key_event(
 }
 
 fn adjust_view_offset(
-	terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+	terminal: &Terminal<CrosstermBackend<io::Stdout>>,
 	view_offset: &mut usize,
 	selected_index: usize,
 ) -> Result<()> {
